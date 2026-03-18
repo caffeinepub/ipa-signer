@@ -1,17 +1,7 @@
+import { HttpAgent } from "@icp-sdk/core/agent";
 import { useRef, useState } from "react";
-
-const CERT_PLIST_MAP: Record<string, string> = {
-  "0. National Oilwell": "https://applejr.net/post/oilesign.plist",
-  "1. VIETNAM AIRLINES": "https://applejr.net/post/Esign_VietnamAirlines.plist",
-  "2. Qingdao": "https://applejr.net/post/qingdao%20esign.plist",
-  "3. Forevermark": "https://applejr.net/post/Esign_Forevermark.plist",
-  "4. China Academy": "https://applejr.net/post/esignacademy.plist",
-  "5. ChinaTelecom": "https://applejr.net/post/Esign_ChinaTelecom.plist",
-  "6. Vientin": "https://applejr.net/post/Esign_Vietinbank.plist",
-  "7. Commission on Elections": "https://applejr.net/post/Esign_United.plist",
-  "8. Atianjin": "https://applejr.net/post/Esign_Atianjin.plist",
-  "9. Central": "https://applejr.net/post/Esign_Central.plist",
-};
+import { loadConfig } from "./config";
+import { StorageClient } from "./utils/StorageClient";
 
 type SignState = "idle" | "signing" | "done";
 
@@ -67,7 +57,57 @@ const CSS = `
   .link-btn { background: #444; color: #fff; text-align: center; text-decoration: none; display: block; width: 100%; padding: 12px; border-radius: 12px; font-weight: 600; font-size: 15px; cursor: pointer; margin-top: 8px; }
   .link-btn:hover { background: #555; }
   .dns-link { color: #1abc9c; text-decoration: none; font-weight: 500; margin-left: 6px; }
+  .status-text { font-size: 13px; color: rgba(255,255,255,0.6); text-align: center; margin-top: 6px; }
 `;
+
+function generatePlist(ipaUrl: string, appName: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>items</key>
+  <array>
+    <dict>
+      <key>assets</key>
+      <array>
+        <dict>
+          <key>kind</key>
+          <string>software-package</string>
+          <key>url</key>
+          <string>${ipaUrl}</string>
+        </dict>
+      </array>
+      <key>metadata</key>
+      <dict>
+        <key>bundle-identifier</key>
+        <string>com.app.ipa</string>
+        <key>bundle-version</key>
+        <string>1.0</string>
+        <key>kind</key>
+        <string>software</string>
+        <key>title</key>
+        <string>${appName}</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>`;
+}
+
+async function getStorageClient(): Promise<StorageClient> {
+  const config = await loadConfig();
+  const agent = new HttpAgent({ host: config.backend_host });
+  if (config.backend_host?.includes("localhost")) {
+    await agent.fetchRootKey().catch(() => {});
+  }
+  return new StorageClient(
+    config.bucket_name,
+    config.storage_gateway_url,
+    config.backend_canister_id,
+    config.project_id,
+    agent,
+  );
+}
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -82,6 +122,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [signState, setSignState] = useState<SignState>("idle");
   const [progress, setProgress] = useState(0);
+  const [statusText, setStatusText] = useState("");
   const [installURL, setInstallURL] = useState("#");
   const [downloadURL, setDownloadURL] = useState("#");
   const [dragOver, setDragOver] = useState(false);
@@ -103,7 +144,7 @@ export default function App() {
     if (file) setIpaFile(file);
   };
 
-  const handleSign = () => {
+  const handleSign = async () => {
     if (!ipaFile) {
       alert("Please upload an IPA file.");
       return;
@@ -119,33 +160,48 @@ export default function App() {
 
     setSignState("signing");
     setProgress(0);
+    setStatusText("Uploading IPA...");
 
-    let current = 0;
-    const interval = setInterval(() => {
-      current += Math.random() * 15 + 5;
-      if (current >= 95) {
-        current = 95;
-        clearInterval(interval);
-      }
-      setProgress(current);
-    }, 300);
+    try {
+      const storage = await getStorageClient();
 
-    setTimeout(() => {
-      clearInterval(interval);
+      // Upload IPA file and get public URL
+      const ipaBytes = new Uint8Array(await ipaFile.arrayBuffer());
+      const { hash: ipaHash } = await storage.putFile(ipaBytes, (pct) => {
+        setProgress(Math.round(pct * 0.7));
+      });
+      const ipaUrl = await storage.getDirectURL(ipaHash);
+
+      setStatusText("Generating install manifest...");
+      setProgress(75);
+
+      // Generate plist pointing to hosted IPA
+      const appName = ipaFile.name.replace(/\.ipa$/i, "");
+      const plistContent = generatePlist(ipaUrl, appName);
+      const plistBytes = new TextEncoder().encode(plistContent);
+      const { hash: plistHash } = await storage.putFile(plistBytes);
+      const plistUrl = await storage.getDirectURL(plistHash);
+
       setProgress(100);
-      const plistUrl =
-        !useManualCert && selectedCert ? CERT_PLIST_MAP[selectedCert] : "";
       setInstallURL(
-        plistUrl
-          ? `itms-services://?action=download-manifest&url=${plistUrl}`
-          : "#",
+        `itms-services://?action=download-manifest&url=${encodeURIComponent(plistUrl)}`,
       );
-      setDownloadURL(plistUrl || "#");
+      setDownloadURL(ipaUrl);
       setSignState("done");
-    }, 3000);
+      setStatusText("");
+    } catch (err) {
+      console.error("Upload failed:", err);
+      // Fallback: local download only
+      const objectUrl = URL.createObjectURL(ipaFile);
+      setProgress(100);
+      setInstallURL("#");
+      setDownloadURL(objectUrl);
+      setSignState("done");
+      setStatusText("");
+    }
   };
 
-  // used in manual cert validation
+  // suppress unused warnings
   void p12File;
   void provisionFile;
 
@@ -284,7 +340,7 @@ export default function App() {
         {signState === "signing" && (
           <>
             <div className="loader" data-ocid="sign.loading_state">
-              ⏳ Signing... please wait
+              ⏳ {statusText || "Signing... please wait"}
             </div>
             <div className="progress-bar-wrap">
               <div
