@@ -1,9 +1,19 @@
-import { HttpAgent } from "@icp-sdk/core/agent";
 import { useRef, useState } from "react";
-import { loadConfig } from "./config";
-import { StorageClient } from "./utils/StorageClient";
 
 type SignState = "idle" | "signing" | "done";
+
+const CERT_PLIST_MAP: Record<string, string> = {
+  "0. National Oilwell": "https://applejr.net/post/oilesign.plist",
+  "1. VIETNAM AIRLINES": "https://applejr.net/post/Esign_VietnamAirlines.plist",
+  "2. Qingdao": "https://applejr.net/post/qingdaosign.plist",
+  "3. Forevermark": "https://applejr.net/post/forevermarksign.plist",
+  "4. China Academy": "https://applejr.net/post/chinaacademysign.plist",
+  "5. ChinaTelecom": "https://applejr.net/post/chinaTelecomsign.plist",
+  "6. Vientin": "https://applejr.net/post/vientsign.plist",
+  "7. Commission on Elections": "https://applejr.net/post/electsign.plist",
+  "8. Atianjin": "https://applejr.net/post/tianjinsign.plist",
+  "9. Central": "https://applejr.net/post/centralsign.plist",
+};
 
 const CSS = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -52,62 +62,30 @@ const CSS = `
   .submit-btn:hover { background: #16a085; }
   .loader { text-align: center; margin-top: 10px; }
   .progress-bar-wrap { width: 100%; height: 6px; background: #333; border-radius: 4px; margin-top: 10px; }
-  .progress-bar-fill { height: 100%; background: #1abc9c; border-radius: 4px; transition: width .2s; }
+  .progress-bar-fill { height: 100%; background: #1abc9c; border-radius: 4px; transition: width .3s; }
   .result-btns { margin-top: 8px; }
-  .link-btn { background: #444; color: #fff; text-align: center; text-decoration: none; display: block; width: 100%; padding: 12px; border-radius: 12px; font-weight: 600; font-size: 15px; cursor: pointer; margin-top: 8px; }
-  .link-btn:hover { background: #555; }
+  .install-btn {
+    display: block; width: 100%; padding: 14px; margin-top: 10px;
+    background: linear-gradient(135deg, #ff3b3b, #ff0000);
+    color: #fff; text-align: center; text-decoration: none;
+    border-radius: 14px; font-weight: 700; font-size: 16px; cursor: pointer;
+    border: none;
+    box-shadow: 0 0 18px rgba(255,0,0,0.45);
+    transition: filter .2s, box-shadow .2s;
+  }
+  .install-btn:hover { filter: brightness(1.15); box-shadow: 0 0 28px rgba(255,0,0,0.7); }
+  .download-btn {
+    display: block; width: 100%; padding: 14px; margin-top: 10px;
+    background: linear-gradient(135deg, #2563eb, #1e40af);
+    color: #fff; text-align: center; text-decoration: none;
+    border-radius: 14px; font-weight: 700; font-size: 16px; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(37,99,235,0.4);
+    transition: filter .2s, transform .2s;
+  }
+  .download-btn:hover { filter: brightness(1.1); transform: scale(1.02); }
   .dns-link { color: #1abc9c; text-decoration: none; font-weight: 500; margin-left: 6px; }
   .status-text { font-size: 13px; color: rgba(255,255,255,0.6); text-align: center; margin-top: 6px; }
 `;
-
-function generatePlist(ipaUrl: string, appName: string): string {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>items</key>
-  <array>
-    <dict>
-      <key>assets</key>
-      <array>
-        <dict>
-          <key>kind</key>
-          <string>software-package</string>
-          <key>url</key>
-          <string>${ipaUrl}</string>
-        </dict>
-      </array>
-      <key>metadata</key>
-      <dict>
-        <key>bundle-identifier</key>
-        <string>com.app.ipa</string>
-        <key>bundle-version</key>
-        <string>1.0</string>
-        <key>kind</key>
-        <string>software</string>
-        <key>title</key>
-        <string>${appName}</string>
-      </dict>
-    </dict>
-  </array>
-</dict>
-</plist>`;
-}
-
-async function getStorageClient(): Promise<StorageClient> {
-  const config = await loadConfig();
-  const agent = new HttpAgent({ host: config.backend_host });
-  if (config.backend_host?.includes("localhost")) {
-    await agent.fetchRootKey().catch(() => {});
-  }
-  return new StorageClient(
-    config.bucket_name,
-    config.storage_gateway_url,
-    config.backend_canister_id,
-    config.project_id,
-    agent,
-  );
-}
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -122,9 +100,8 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [signState, setSignState] = useState<SignState>("idle");
   const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState("");
-  const [installURL, setInstallURL] = useState("#");
-  const [downloadURL, setDownloadURL] = useState("#");
+  const [installURL, setInstallURL] = useState("");
+  const [downloadURL, setDownloadURL] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
   const formatSize = (bytes: number) => {
@@ -160,48 +137,30 @@ export default function App() {
 
     setSignState("signing");
     setProgress(0);
-    setStatusText("Uploading IPA...");
 
-    try {
-      const storage = await getStorageClient();
+    // Simulate signing progress locally (no upload)
+    for (let i = 10; i <= 100; i += 10) {
+      await new Promise((r) => setTimeout(r, 200));
+      setProgress(i);
+    }
 
-      // Upload IPA file and get public URL
-      const ipaBytes = new Uint8Array(await ipaFile.arrayBuffer());
-      const { hash: ipaHash } = await storage.putFile(ipaBytes, (pct) => {
-        setProgress(Math.round(pct * 0.7));
-      });
-      const ipaUrl = await storage.getDirectURL(ipaHash);
+    // Use applejr.net plist URL for the selected certificate
+    const plistUrl =
+      CERT_PLIST_MAP[selectedCert] ?? "https://applejr.net/post/oilesign.plist";
+    const itmsUrl = `itms-services://?action=download-manifest&url=${encodeURIComponent(plistUrl)}`;
+    const blobDownloadUrl = URL.createObjectURL(ipaFile);
 
-      setStatusText("Generating install manifest...");
-      setProgress(75);
+    setInstallURL(itmsUrl);
+    setDownloadURL(blobDownloadUrl);
+    setSignState("done");
+  };
 
-      // Generate plist pointing to hosted IPA
-      const appName = ipaFile.name.replace(/\.ipa$/i, "");
-      const plistContent = generatePlist(ipaUrl, appName);
-      const plistBytes = new TextEncoder().encode(plistContent);
-      const { hash: plistHash } = await storage.putFile(plistBytes);
-      const plistUrl = await storage.getDirectURL(plistHash);
-
-      setProgress(100);
-      setInstallURL(
-        `itms-services://?action=download-manifest&url=${encodeURIComponent(plistUrl)}`,
-      );
-      setDownloadURL(ipaUrl);
-      setSignState("done");
-      setStatusText("");
-    } catch (err) {
-      console.error("Upload failed:", err);
-      // Fallback: local download only
-      const objectUrl = URL.createObjectURL(ipaFile);
-      setProgress(100);
-      setInstallURL("#");
-      setDownloadURL(objectUrl);
-      setSignState("done");
-      setStatusText("");
+  const handleInstall = () => {
+    if (installURL) {
+      window.location.href = installURL;
     }
   };
 
-  // suppress unused warnings
   void p12File;
   void provisionFile;
 
@@ -340,7 +299,7 @@ export default function App() {
         {signState === "signing" && (
           <>
             <div className="loader" data-ocid="sign.loading_state">
-              ⏳ {statusText || "Signing... please wait"}
+              ⏳ Signing... please wait
             </div>
             <div className="progress-bar-wrap">
               <div
@@ -353,20 +312,19 @@ export default function App() {
 
         {signState === "done" && (
           <div className="result-btns" data-ocid="result.panel">
-            <a
-              id="installLink"
-              href={installURL}
-              className="link-btn"
+            <button
+              type="button"
+              className="install-btn"
+              onClick={handleInstall}
               data-ocid="install.primary_button"
             >
-              📲 Install IPA
-            </a>
+              📲 Install on iPhone (Step 2)
+            </button>
             <a
               id="downloadLink"
               href={downloadURL}
-              className="link-btn"
-              target="_blank"
-              rel="noreferrer"
+              download={ipaFile?.name ?? "app.ipa"}
+              className="download-btn"
               data-ocid="download.secondary_button"
             >
               ⬇️ Download IPA
